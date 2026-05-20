@@ -1,0 +1,22 @@
+{
+  "name": "@koichikawamura/omni-fetcher",
+  "version": "0.1.0",
+  "files": [
+    "mcp-server.js",
+    "extractContent.js",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "bin": {
+    "omni-fetcher-mcp": "./mcp-server.js"
+  },
+  "dependencies": {
+    "@jocmp/mercury-parser": "^2.2.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "html-entities": "^2.6.0",
+    "playwright": "^1.60.0",
+    "zod": "^3.24.2"
+  }
+}
