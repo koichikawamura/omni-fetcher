@@ -1,0 +1,42 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+An MCP server (`@koichikawamura/omni-fetcher`) exposing an `extract` tool: given a URL, it renders the page with headless Chromium (Playwright) so JS content is captured, then returns it in one of four forms — `mercury` (Mercury Parser Markdown), `defuddle` (Defuddle Markdown), `rendered_html`, or `screenshot` (PNG). Rendered HTML is cached per URL/proxy in SQLite; proxies can be referenced by id from a SQLite-backed database seeded from a config file. A second `list_proxies` tool reports registered proxies. ESM only (`"type": "module"`). No build step, no test framework, no linter.
+
+**Node 22.5+ required** — persistence uses the built-in `node:sqlite` module on purpose, so there is no native dependency to compile. (`better-sqlite3` was tried first and fails to build against Node 26's V8.)
+
+## Commands
+
+```sh
+npm install                                           # deps; Playwright Chromium NOT installed here
+node mcp-server.js                                    # run MCP server (stdio, default)
+MCP_TRANSPORT=http MCP_PORT=3030 node mcp-server.js   # run over Streamable HTTP at /mcp
+node extractContent.js <url> [format] [proxy]         # exercise the engine directly, no MCP
+```
+
+The CLI form of `extractContent.js` is the fastest way to test extraction changes (prints text, or base64 PNG for `screenshot`, then exits). There is no test suite; verify against real URLs. Playwright's Chromium auto-installs on first launch failure via `launchOrInstall` — no manual step.
+
+## Architecture
+
+Split by responsibility:
+
+- **`mcp-server.js`** — transport/protocol only. Registers `extract` + `list_proxies` tools and an `info` resource, calls `loadProxiesFromFile()` at startup, then connects a `StdioServerTransport` or `StreamableHTTPServerTransport` per `MCP_TRANSPORT`. HTTP mode is **stateless**: `buildServer()` runs fresh per request (`sessionIdGenerator: undefined`), torn down on response close. SIGINT/SIGTERM call `closeBrowser()` before exit. Screenshot results are returned as an `image` content block; everything else as `text`.
+- **`extractContent.js`** — the engine + standalone CLI (the `import.meta.url === file://...` guard). Default export `extractContent(url, { proxy, format })` returns `{ type: 'text', text }` or `{ type: 'image', data, mimeType }`. Also exports `closeBrowser`, `FORMATS`, `DEFAULT_FORMAT`.
+- **`db.js`** — single shared `node:sqlite` connection (`getDb()`), creates the `rendered_html` and `proxies` tables. WAL mode.
+- **`cache.js`** — `getCachedRender` / `setCachedRender`, keyed by `(url, proxy)`; entries past `OMNI_CACHE_TTL` are treated as misses and pruned.
+- **`proxies.js`** — `loadProxiesFromFile` (seeds the `proxies` table from `OMNI_PROXIES_FILE`), `listProxies`, and `resolveProxy`.
+
+Cross-cutting behaviors worth knowing before editing:
+
+- **stdout is sacred in stdio mode.** The JSON-RPC stream lives on stdout, so nothing else may write there. All logging uses `console.error`. **Defuddle logs to stdout via `console.log`** — `parseWithDefuddle` temporarily reassigns `console.log` to `console.error` around the call. Don't remove that guard, and never add a bare `console.log` to the request path.
+- **Browser pooling by proxy.** `browserPromises` is a module-level `Map` keyed by proxy URL (`''` for none). Browsers launch lazily, are reused across requests, and are only closed by `closeBrowser()` on shutdown — never per request. Each render gets a fresh `context`/`page`. Don't close the shared browser per-request.
+- **Render path & cache.** `renderPage(url, proxy)` checks the cache, else Playwright-renders, captures the next-page link, and stores `{html, nextUrl}`. On Playwright failure it falls back to a plain `fetch` of raw HTML (no proxy, `nextUrl: null`) and caches that. All non-screenshot formats consume this cached HTML; `screenshot` (`takeScreenshot`) bypasses the cache and always renders live.
+- **Pagination.** `crawl` follows next-page links into an ordered page list, assembled by `formatMarkdown` (shared by mercury and defuddle; `rawContent: true` skips unescaping since Defuddle already emits Markdown). `findNextPageLink` uses text/`rel=next`/pagination-CSS heuristics including Japanese (`次へ`, `次ページ`); `visited` guards loops.
+- **Proxy resolution order.** `resolveProxy(spec)` (a `://` URL is literal, else looked up as an id — unknown id throws) → `MERCURY_PROXY` → none.
+
+## Provenance & roadmap
+
+Built up from a clone of `mercury-parser` (see `dev_notes/omni-fetcher.md`, "Phase 0"). The upstream parser dependency `@jocmp/mercury-parser` keeps its original name — do not rename it.

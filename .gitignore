@@ -42,6 +42,15 @@ build/Release
 node_modules/
 jspm_packages/
 
+# omni-fetcher local data
+omni-fetcher.db
+omni-fetcher.db-shm
+omni-fetcher.db-wal
+proxies.json
+
+# Local development notes
+dev_notes/
+
 # Snowpack dependency directory (https://snowpack.dev/)
 web_modules/
 

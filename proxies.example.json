@@ -1,0 +1,4 @@
+[
+  { "id": "jp-tokyo", "url": "socks5://localhost:1080", "location": "Tokyo, JP" },
+  { "id": "us-east", "url": "http://user:pass@proxy.example.com:3128", "location": "Virginia, US" }
+]

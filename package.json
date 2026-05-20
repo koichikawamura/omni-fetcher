@@ -4,6 +4,10 @@
   "files": [
     "mcp-server.js",
     "extractContent.js",
+    "db.js",
+    "cache.js",
+    "proxies.js",
+    "proxies.example.json",
     "package.json",
     "README.md",
     "LICENSE"
@@ -12,9 +16,13 @@
   "bin": {
     "omni-fetcher-mcp": "./mcp-server.js"
   },
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "dependencies": {
     "@jocmp/mercury-parser": "^2.2.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "defuddle": "^0.6.0",
     "html-entities": "^2.6.0",
     "playwright": "^1.60.0",
     "zod": "^3.24.2"

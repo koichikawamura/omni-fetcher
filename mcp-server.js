@@ -5,7 +5,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import extractContentToMarkdown, { closeBrowser } from './extractContent.js';
+import extractContent, { closeBrowser, FORMATS, DEFAULT_FORMAT } from './extractContent.js';
+import { loadProxiesFromFile, listProxies } from './proxies.js';
 
 const buildServer = () => {
   const server = new McpServer({
@@ -17,27 +18,49 @@ const buildServer = () => {
     "extract",
     {
       title: "Extract Web Content",
-      description: "Extract content from a website and convert it to markdown format",
+      description:
+        "Fetch a web page (rendered with a headless browser) and return it in the requested form. " +
+        "Pick the cheapest form that meets the need, escalating only if it fails or is insufficient: " +
+        "`mercury` and `defuddle` return clean article Markdown (try mercury first, defuddle if mercury misses content); " +
+        "`rendered_html` returns the full rendered HTML (large; use when you need raw markup or the extractors fail); " +
+        "`screenshot` returns a PNG image (most expensive; use only when visual layout matters or text extraction fails).",
       inputSchema: {
-        url: z.string().describe("URL of the website to extract content from"),
+        url: z.string().describe("URL of the website to fetch"),
+        format: z.enum(FORMATS).optional().describe(
+          `Output form (default "${DEFAULT_FORMAT}"). Ordered cheap -> expensive: ${FORMATS.join(', ')}.`
+        ),
         proxy: z.string().optional().describe(
-          "Optional proxy URL for the headless browser, e.g. socks5://localhost:1080 or http://user:pass@host:port"
+          "Optional proxy for the headless browser. Either a full URL (e.g. socks5://localhost:1080, " +
+          "http://user:pass@host:port) or a proxy id registered in the proxy database."
         )
       }
     },
-    async ({ url, proxy }) => {
+    async ({ url, format, proxy }) => {
       try {
-        console.error(`Handling extract request for URL: ${url}${proxy ? ` via proxy ${proxy}` : ''}`);
-        const markdown = await extractContentToMarkdown(url, { proxy });
+        console.error(`Handling extract request: ${url} [${format || DEFAULT_FORMAT}]${proxy ? ` via ${proxy}` : ''}`);
+        const result = await extractContent(url, { format, proxy });
         console.error(`Successfully extracted content from: ${url}`);
-        return {
-          content: [{ type: "text", text: markdown }]
-        };
+        if (result.type === 'image') {
+          return { content: [{ type: "image", data: result.data, mimeType: result.mimeType }] };
+        }
+        return { content: [{ type: "text", text: result.text }] };
       } catch (error) {
         console.error(`Error in extract: ${error.message}`);
         throw new Error(`Failed to extract content: ${error.message}`);
       }
     }
+  );
+
+  server.registerTool(
+    "list_proxies",
+    {
+      title: "List Proxies",
+      description: "List proxies registered in the proxy database (id, url, location). Use an id as the `proxy` argument to `extract`.",
+      inputSchema: {}
+    },
+    async () => ({
+      content: [{ type: "text", text: JSON.stringify(listProxies(), null, 2) }]
+    })
   );
 
   server.registerResource(
@@ -54,9 +77,10 @@ const buildServer = () => {
           uri: uri.href,
           text: JSON.stringify({
             name: "Omni Fetcher",
-            description: "MCP service that extracts content from websites and converts it to markdown format",
+            description: "MCP service that fetches web content as Markdown, raw HTML, or a screenshot",
             version: "1.0.0",
-            capabilities: ["extract"]
+            formats: FORMATS,
+            capabilities: ["extract", "list_proxies"]
           })
         }
       ]
@@ -139,6 +163,7 @@ const startHttp = async () => {
 
 const start = async () => {
   try {
+    loadProxiesFromFile();
     if (transportMode === 'http') {
       await startHttp();
     } else {

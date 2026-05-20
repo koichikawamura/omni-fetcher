@@ -1,63 +1,70 @@
 # omni-fetcher
 
-An MCP wrapper around [jocmp/mercury-parser](https://github.com/jocmp/mercury-parser) (a maintained fork of Postlight Parser). Fetches a web page with a headless Chromium (Playwright) so JavaScript-rendered content is captured, then runs Mercury Parser to extract the article and returns it as Markdown. Follows pagination links automatically.
+An MCP server for fetching web content in whatever form you need. Every page is first rendered with a headless Chromium (Playwright) so JavaScript-rendered content is captured, then returned as clean Markdown, raw HTML, or a screenshot. Rendered HTML is cached per URL/proxy, and proxies can be referenced by short id from a local database.
 
-## Tool
-
-The server exposes a single tool:
-
-### `extract`
+## Tool: `extract`
 
 | Argument | Type | Required | Description |
 |---|---|:-:|---|
-| `url` | string | yes | URL of the page to extract |
-| `proxy` | string | no | Proxy URL for the headless browser, e.g. `http://host:port`, `socks5://host:port`, `http://user:pass@host:port`. Overrides the `MERCURY_PROXY` env var for this call. |
+| `url` | string | yes | URL of the page to fetch |
+| `format` | enum | no | Output form (default `mercury`). One of `rendered_html`, `mercury`, `defuddle`, `screenshot`. |
+| `proxy` | string | no | Full proxy URL (`http://host:port`, `socks5://host:port`, `http://user:pass@host:port`) **or** a proxy id registered in the proxy database. Overrides `MERCURY_PROXY` for this call. |
 
-Returns the article as Markdown (title, author, date, summary, content). On Playwright failure (HTTP/2 protocol errors, navigation timeouts, etc.) falls back to a direct fetch via Mercury Parser so partial content is still returned.
+### Formats (cheap → expensive)
+
+Pick the cheapest form that meets the need and escalate only if it fails or is insufficient:
+
+| Format | Returns | When to use |
+|---|---|---|
+| `mercury` | Article Markdown via [Mercury Parser](https://github.com/jocmp/mercury-parser) | Default; clean article text. |
+| `defuddle` | Article Markdown via [Defuddle](https://github.com/kepano/defuddle) | When Mercury misses content — a second opinion extractor. |
+| `rendered_html` | Full rendered HTML | When you need raw markup, or both extractors fail. (Large output.) |
+| `screenshot` | Full-page PNG (base64 image) | Most expensive; when visual layout matters or text extraction fails. |
+
+`mercury`, `defuddle`, and `rendered_html` all reuse the same cached rendered HTML and follow pagination links automatically. `screenshot` always drives a live browser and is not cached.
+
+## Tool: `list_proxies`
+
+Returns the registered proxies (`id`, `url`, `location`) so you know which ids you can pass to `extract`.
+
+## Proxy database
+
+Proxies are seeded from a JSON config file at startup (see `proxies.example.json`):
+
+```json
+[
+  { "id": "jp-tokyo", "url": "socks5://localhost:1080", "location": "Tokyo, JP" },
+  { "id": "us-east", "url": "http://user:pass@proxy.example.com:3128", "location": "Virginia, US" }
+]
+```
+
+Copy it to `proxies.json` (or point `OMNI_PROXIES_FILE` elsewhere) and edit. After that you can call `extract` with `proxy: "jp-tokyo"` instead of the full URL. A `proxy` value containing `://` is always treated as a literal URL; otherwise it is looked up as an id.
 
 ## Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `MCP_TRANSPORT` | `stdio` | `stdio` or `http`. Use `http` for remote/Streamable HTTP transport. |
+| `MCP_TRANSPORT` | `stdio` | `stdio` or `http` (Streamable HTTP). |
 | `MCP_HOST` | `127.0.0.1` | Bind address when `MCP_TRANSPORT=http`. |
 | `MCP_PORT` | `3000` | Bind port when `MCP_TRANSPORT=http`. |
 | `MCP_PATH` | `/mcp` | URL path when `MCP_TRANSPORT=http`. |
-| `MERCURY_PROXY` | — | Default proxy for the headless browser. Overridden per-call by the `proxy` tool argument. |
+| `MERCURY_PROXY` | — | Default proxy for the headless browser, used when no `proxy` argument is given. |
+| `OMNI_DB_PATH` | `./omni-fetcher.db` | SQLite file holding the render cache and proxy database. |
+| `OMNI_CACHE_TTL` | `86400` | Rendered-HTML cache lifetime, in seconds. |
+| `OMNI_PROXIES_FILE` | `./proxies.json` | JSON file seeding the proxy database. |
 
 ## Usage
 
 ### Claude Desktop (local stdio)
 
-Add to `claude_desktop_config.json`:
-
 ```json
 {
     "mcpServers": {
         "omni-fetcher": {
             "command": "npx",
-            "args": [
-                "@koichikawamura/omni-fetcher",
-                "omni-fetcher-mcp"
-            ]
-        }
-    }
-}
-```
-
-To route the headless browser through a proxy on every call:
-
-```json
-{
-    "mcpServers": {
-        "omni-fetcher": {
-            "command": "npx",
-            "args": [
-                "@koichikawamura/omni-fetcher",
-                "omni-fetcher-mcp"
-            ],
+            "args": ["@koichikawamura/omni-fetcher", "omni-fetcher-mcp"],
             "env": {
-                "MERCURY_PROXY": "socks5://localhost:1080"
+                "OMNI_PROXIES_FILE": "/absolute/path/to/proxies.json"
             }
         }
     }
@@ -66,27 +73,27 @@ To route the headless browser through a proxy on every call:
 
 ### Remote MCP (Streamable HTTP)
 
-Run the server over HTTP — useful behind a reverse proxy / Cloudflare Tunnel:
-
 ```sh
 MCP_TRANSPORT=http \
 MCP_HOST=127.0.0.1 \
 MCP_PORT=3030 \
-MERCURY_PROXY=http://your-proxy:3128 \
 npx @koichikawamura/omni-fetcher omni-fetcher-mcp
 ```
 
-Clients reach it at `http://<host>:<port>/mcp`. Pair with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) on the client side, or register directly as a connector in Claude.ai / ChatGPT if the endpoint is gated by an OAuth-aware proxy (e.g. Cloudflare Access).
+Clients reach it at `http://<host>:<port>/mcp`. Pair with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) on the client side, or register directly as a connector in Claude.ai / ChatGPT if the endpoint is gated by an OAuth-aware proxy.
 
 ### CLI (ad-hoc testing)
 
 ```sh
-node extractContent.js <url> [proxy]
+node extractContent.js <url> [format] [proxy]
+# e.g.
+node extractContent.js https://example.com defuddle
+node extractContent.js https://example.com screenshot   # prints base64 PNG to stdout
 ```
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 22.5+ (uses the built-in `node:sqlite` module — no native build step)
 - Playwright Chromium (auto-installed on first launch if missing)
 
 ## License
