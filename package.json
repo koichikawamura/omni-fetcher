@@ -14,7 +14,7 @@
   ],
   "type": "module",
   "bin": {
-    "omni-fetcher-mcp": "./mcp-server.js"
+    "omni-fetcher-mcp": "mcp-server.js"
   },
   "engines": {
     "node": ">=22.5.0"
