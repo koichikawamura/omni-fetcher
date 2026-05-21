@@ -3,10 +3,16 @@
 import Mercury from '@jocmp/mercury-parser';
 import { Defuddle } from 'defuddle/node';
 import { decode } from 'html-entities';
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { spawn } from 'child_process';
 import { getCachedRender, setCachedRender } from './cache.js';
 import { resolveProxy, loadProxiesFromFile } from './proxies.js';
+
+// playwright-extra wraps Playwright's chromium so the stealth plugin can patch
+// the headless fingerprint (navigator.webdriver, window.chrome, plugins, WebGL
+// vendor, etc.) that anti-bot layers use to detect and reset automated browsers.
+chromium.use(StealthPlugin());
 
 const USER_AGENT =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
@@ -21,9 +27,45 @@ export const DEFAULT_FORMAT = 'mercury';
 const browserPromises = new Map();
 
 function launchOptions(proxy) {
-  const opts = { headless: true };
+  // --disable-blink-features=AutomationControlled stops Chromium from
+  // advertising itself as automated, which some anti-bot layers reset on.
+  const opts = {
+    headless: true,
+    args: ['--disable-blink-features=AutomationControlled'],
+  };
   if (proxy) opts.proxy = { server: proxy };
   return opts;
+}
+
+// A browser context with real-ish locale, timezone, viewport, and language
+// header. The headless fingerprint itself (navigator.webdriver, window.chrome,
+// WebGL vendor, …) is handled by the stealth plugin applied at module load.
+async function newContext(browser) {
+  return browser.newContext({
+    userAgent: USER_AGENT,
+    locale: 'ja-JP',
+    timezoneId: 'Asia/Tokyo',
+    viewport: { width: 1366, height: 900 },
+    extraHTTPHeaders: { 'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7' },
+  });
+}
+
+// Transient network errors worth one retry rather than an immediate fallback.
+const TRANSIENT_NAV_ERROR = /ERR_CONNECTION_RESET|ERR_CONNECTION_CLOSED|ERR_NETWORK_CHANGED|ERR_HTTP2_PROTOCOL_ERROR|ERR_ABORTED/i;
+
+// Navigate with one retry on transient resets. `domcontentloaded` (not
+// `networkidle`) is used everywhere: networkidle holds the connection open long
+// enough on ad/anti-bot-heavy sites to draw a connection reset, and often never
+// settles at all.
+async function gotoResilient(page, url, waitUntil = 'domcontentloaded') {
+  try {
+    await page.goto(url, { waitUntil, timeout: 30000 });
+  } catch (err) {
+    if (!TRANSIENT_NAV_ERROR.test(err?.message || '')) throw err;
+    console.error(`[omni-fetcher] ${url} navigation reset; retrying once.`);
+    await page.waitForTimeout(1500);
+    await page.goto(url, { waitUntil, timeout: 30000 });
+  }
 }
 
 async function launchOrInstall(proxy) {
@@ -97,10 +139,10 @@ async function renderPage(url, proxy) {
 
   console.error(`[omni-fetcher] Rendering: ${url}`);
   const browser = await getBrowser(proxy);
-  const context = await browser.newContext({ userAgent: USER_AGENT });
+  const context = await newContext(browser);
   const page = await context.newPage();
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await gotoResilient(page, url);
     const html = await page.content();
     const nextUrl = await findNextPageLinkSafe(page);
     setCachedRender(url, proxy, html, nextUrl);
@@ -137,13 +179,43 @@ async function crawl(startUrl, proxy) {
   return pages;
 }
 
+// Scroll to the bottom (then back up) to trigger lazy-loaded images before a
+// full-page screenshot, replacing the role networkidle used to play. Bounded so
+// it can't loop forever on infinite-scroll pages.
+async function autoScroll(page) {
+  await page.evaluate(async () => {
+    await new Promise(resolve => {
+      let scrolled = 0;
+      let ticks = 0;
+      const step = 600;
+      const timer = setInterval(() => {
+        window.scrollBy(0, step);
+        scrolled += step;
+        ticks += 1;
+        if (scrolled >= document.body.scrollHeight || ticks > 50) {
+          clearInterval(timer);
+          window.scrollTo(0, 0);
+          resolve();
+        }
+      }, 80);
+    });
+  });
+}
+
 async function takeScreenshot(url, proxy) {
   console.error(`[omni-fetcher] Screenshotting: ${url}`);
   const browser = await getBrowser(proxy);
-  const context = await browser.newContext({ userAgent: USER_AGENT });
+  const context = await newContext(browser);
   const page = await context.newPage();
   try {
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+    await gotoResilient(page, url);
+    // Best-effort: let the page finish loading, but never fail the request if it
+    // never reaches a quiet 'load' state.
+    try {
+      await page.waitForLoadState('load', { timeout: 8000 });
+    } catch { /* proceed with whatever has rendered */ }
+    await autoScroll(page);
+    await page.waitForTimeout(500);
     return await page.screenshot({ fullPage: true, type: 'png' });
   } finally {
     await context.close();

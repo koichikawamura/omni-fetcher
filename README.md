@@ -23,6 +23,8 @@ Pick the cheapest form that meets the need and escalate only if it fails or is i
 
 `mercury`, `defuddle`, and `rendered_html` all reuse the same cached rendered HTML and follow pagination links automatically. `screenshot` always drives a live browser and is not cached.
 
+The headless browser runs through [`playwright-extra`](https://www.npmjs.com/package/playwright-extra) with the [stealth plugin](https://www.npmjs.com/package/puppeteer-extra-plugin-stealth), which masks the automation fingerprint (`navigator.webdriver`, `window.chrome`, WebGL vendor, …) that some sites use to detect and reset bots. Navigation waits on `domcontentloaded` and retries once on transient connection resets. This still won't beat the strongest anti-bot stacks — pairing with a residential proxy helps there.
+
 ## Tool: `list_proxies`
 
 Returns the registered proxies (`id`, `url`, `location`) so you know which ids you can pass to `extract`.
