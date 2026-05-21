@@ -40,7 +40,7 @@ Proxies are seeded from a JSON config file at startup (see `proxies.example.json
 ]
 ```
 
-Copy it to `proxies.json` (or point `OMNI_PROXIES_FILE` elsewhere) and edit. After that you can call `extract` with `proxy: "jp-tokyo"` instead of the full URL. A `proxy` value containing `://` is always treated as a literal URL; otherwise it is looked up as an id.
+Save it as `~/.omni-fetcher/proxies.json` (the default location — created on first run; or point `OMNI_PROXIES_FILE` / `OMNI_DATA_DIR` elsewhere). After that you can call `extract` with `proxy: "jp-tokyo"` instead of the full URL. A `proxy` value containing `://` is always treated as a literal URL; otherwise it is looked up as an id.
 
 ## Environment variables
 
@@ -51,9 +51,10 @@ Copy it to `proxies.json` (or point `OMNI_PROXIES_FILE` elsewhere) and edit. Aft
 | `MCP_PORT` | `3000` | Bind port when `MCP_TRANSPORT=http`. |
 | `MCP_PATH` | `/mcp` | URL path when `MCP_TRANSPORT=http`. |
 | `MERCURY_PROXY` | — | Default proxy for the headless browser, used when no `proxy` argument is given. |
-| `OMNI_DB_PATH` | `./omni-fetcher.db` | SQLite file holding the render cache and proxy database. |
+| `OMNI_DATA_DIR` | `~/.omni-fetcher` | Directory holding the SQLite DB and proxy config. Used so `npx` works regardless of cwd. |
+| `OMNI_DB_PATH` | `<OMNI_DATA_DIR>/omni-fetcher.db` | SQLite file holding the render cache and proxy database. |
 | `OMNI_CACHE_TTL` | `86400` | Rendered-HTML cache lifetime, in seconds. |
-| `OMNI_PROXIES_FILE` | `./proxies.json` | JSON file seeding the proxy database. |
+| `OMNI_PROXIES_FILE` | `<OMNI_DATA_DIR>/proxies.json` | JSON file seeding the proxy database. |
 
 ## Usage
 
@@ -64,14 +65,13 @@ Copy it to `proxies.json` (or point `OMNI_PROXIES_FILE` elsewhere) and edit. Aft
     "mcpServers": {
         "omni-fetcher": {
             "command": "npx",
-            "args": ["@koichikawamura/omni-fetcher", "omni-fetcher-mcp"],
-            "env": {
-                "OMNI_PROXIES_FILE": "/absolute/path/to/proxies.json"
-            }
+            "args": ["@koichikawamura/omni-fetcher", "omni-fetcher-mcp"]
         }
     }
 }
 ```
+
+No paths to configure: the SQLite cache and proxy database default to `~/.omni-fetcher/`, so this works under `npx` regardless of the working directory. Drop a `proxies.json` in that directory to register proxies by id.
 
 ### Remote MCP (Streamable HTTP)
 

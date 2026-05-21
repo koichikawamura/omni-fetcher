@@ -1,14 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getDb } from './db.js';
+import { getDb, dataDir } from './db.js';
 
-// The proxy database is seeded from a config file (OMNI_PROXIES_FILE, default
-// ./proxies.json) at startup. Each entry: { id, url, location? }. Callers may
-// then refer to a proxy by its short id instead of pasting the full URL.
+// The proxy database is seeded from a config file at startup (OMNI_PROXIES_FILE,
+// default ~/.omni-fetcher/proxies.json). Each entry: { id, url, location? }.
+// Callers may then refer to a proxy by its short id instead of the full URL.
 
-const PROXIES_FILE = process.env.OMNI_PROXIES_FILE || path.join(process.cwd(), 'proxies.json');
+function proxiesFile() {
+  return process.env.OMNI_PROXIES_FILE || path.join(dataDir(), 'proxies.json');
+}
 
 export function loadProxiesFromFile() {
+  const PROXIES_FILE = proxiesFile();
   if (!fs.existsSync(PROXIES_FILE)) {
     console.error(`[omni-fetcher] No proxy config at ${PROXIES_FILE}; proxy ids unavailable.`);
     return 0;

@@ -25,7 +25,7 @@ Split by responsibility:
 
 - **`mcp-server.js`** — transport/protocol only. Registers `extract` + `list_proxies` tools and an `info` resource, calls `loadProxiesFromFile()` at startup, then connects a `StdioServerTransport` or `StreamableHTTPServerTransport` per `MCP_TRANSPORT`. HTTP mode is **stateless**: `buildServer()` runs fresh per request (`sessionIdGenerator: undefined`), torn down on response close. SIGINT/SIGTERM call `closeBrowser()` before exit. Screenshot results are returned as an `image` content block; everything else as `text`.
 - **`extractContent.js`** — the engine + standalone CLI (the `import.meta.url === file://...` guard). Default export `extractContent(url, { proxy, format })` returns `{ type: 'text', text }` or `{ type: 'image', data, mimeType }`. Also exports `closeBrowser`, `FORMATS`, `DEFAULT_FORMAT`.
-- **`db.js`** — single shared `node:sqlite` connection (`getDb()`), creates the `rendered_html` and `proxies` tables. WAL mode.
+- **`db.js`** — single shared `node:sqlite` connection (`getDb()`), creates the `rendered_html` and `proxies` tables. WAL mode. Persistent state defaults to a per-user dir (`dataDir()` → `~/.omni-fetcher`), **not the cwd**, so `npx` launches behave consistently; override with `OMNI_DATA_DIR` / `OMNI_DB_PATH` / `OMNI_PROXIES_FILE`.
 - **`cache.js`** — `getCachedRender` / `setCachedRender`, keyed by `(url, proxy)`; entries past `OMNI_CACHE_TTL` are treated as misses and pruned.
 - **`proxies.js`** — `loadProxiesFromFile` (seeds the `proxies` table from `OMNI_PROXIES_FILE`), `listProxies`, and `resolveProxy`.
 
