@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import http from 'node:http';
+import fs from 'node:fs';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -8,6 +9,7 @@ import { z } from 'zod';
 import extractContent, { closeBrowser, FORMATS, DEFAULT_FORMAT } from './extractContent.js';
 import { loadProxiesFromFile, listProxies } from './proxies.js';
 import { pruneStaleRenders } from './cache.js';
+import { resolveScreenshotFile, pruneStaleScreenshots } from './screenshots.js';
 import { suggestStrategy } from './knowledge.js';
 
 const buildServer = () => {
@@ -44,6 +46,9 @@ const buildServer = () => {
         console.error(`Successfully extracted content from: ${url}`);
         if (result.type === 'image') {
           return { content: [{ type: "image", data: result.data, mimeType: result.mimeType }] };
+        }
+        if (result.type === 'image_url') {
+          return { content: [{ type: "text", text: result.url }] };
         }
         return { content: [{ type: "text", text: result.text }] };
       } catch (error) {
@@ -114,16 +119,23 @@ const transportMode = (process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
 let httpServer = null;
 let sweepTimer = null;
 
-// Drop renders older than the cache TTL: once at startup, then on an interval
-// for the long-running server (default hourly; override OMNI_CACHE_SWEEP_INTERVAL,
+// Drop stale state — cached renders (cache TTL) and, when storage is on, stored
+// screenshots (OMNI_SCREENSHOT_TTL) — once at startup, then on an interval for
+// the long-running server (default hourly; override OMNI_CACHE_SWEEP_INTERVAL,
 // in seconds; <=0 disables the recurring sweep).
 const startCacheSweep = () => {
-  const sweep = () => {
+  const sweep = async () => {
     try {
       const removed = pruneStaleRenders();
       if (removed > 0) console.error(`Cache sweep: removed ${removed} stale render(s)`);
     } catch (err) {
       console.error(`Cache sweep failed: ${err.message}`);
+    }
+    try {
+      const removed = await pruneStaleScreenshots();
+      if (removed > 0) console.error(`Screenshot sweep: removed ${removed} stale screenshot(s)`);
+    } catch (err) {
+      console.error(`Screenshot sweep failed: ${err.message}`);
     }
   };
   sweep();
@@ -142,12 +154,38 @@ const startStdio = async () => {
   console.error('MCP Server connected (stdio)');
 };
 
+const SCREENSHOT_PATH = '/screenshots/';
+
+const serveScreenshot = (req, res) => {
+  const name = decodeURIComponent(req.url.slice(SCREENSHOT_PATH.length).split('?')[0]);
+  const file = resolveScreenshotFile(name);
+  if (!file) {
+    res.writeHead(404).end('Not Found');
+    return;
+  }
+  const stream = fs.createReadStream(file);
+  stream.once('open', () => res.writeHead(200, { 'content-type': 'image/png' }));
+  stream.on('error', () => {
+    if (!res.headersSent) res.writeHead(404).end('Not Found');
+    else res.end();
+  });
+  stream.pipe(res);
+};
+
 const startHttp = async () => {
   const host = process.env.MCP_HOST || '127.0.0.1';
   const port = parseInt(process.env.MCP_PORT || '3000', 10);
   const path = process.env.MCP_PATH || '/mcp';
 
   httpServer = http.createServer(async (req, res) => {
+    // Serve stored screenshots on the same port (only when OMNI_SCREENSHOT_DIR
+    // is set; resolveScreenshotFile returns null otherwise and for any name that
+    // isn't one of our hashed files, which also blocks path traversal).
+    if (req.method === 'GET' && req.url && req.url.startsWith(SCREENSHOT_PATH)) {
+      serveScreenshot(req, res);
+      return;
+    }
+
     if (!req.url || !req.url.startsWith(path)) {
       res.writeHead(404).end('Not Found');
       return;

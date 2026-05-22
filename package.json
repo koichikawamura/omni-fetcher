@@ -1,6 +1,6 @@
 {
   "name": "@koichikawamura/omni-fetcher",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "files": [
     "mcp-server.js",
     "extractContent.js",

@@ -9,6 +9,7 @@ import { spawn } from 'child_process';
 import { getCachedRender, setCachedRender } from './cache.js';
 import { resolveProxy, loadProxiesFromFile } from './proxies.js';
 import { recordFetch, classifyResult, classifyNavError } from './knowledge.js';
+import { screenshotStorageEnabled, storeScreenshot } from './screenshots.js';
 
 // playwright-extra wraps Playwright's chromium so the stealth plugin can patch
 // the headless fingerprint (navigator.webdriver, window.chrome, plugins, WebGL
@@ -242,7 +243,11 @@ async function parseWithDefuddle(html, url) {
  * @param {{ proxy?: string, format?: string }} [options]
  *   `proxy` may be a full proxy URL or a known proxy id.
  *   `format` is one of FORMATS (default "mercury").
- * @returns {Promise<{ type: 'text', text: string } | { type: 'image', data: string, mimeType: string }>}
+ * @returns {Promise<{ type: 'text', text: string }
+ *   | { type: 'image', data: string, mimeType: string }
+ *   | { type: 'image_url', url: string, mimeType: string }>}
+ *   `image_url` is returned for screenshots only when OMNI_SCREENSHOT_DIR is set
+ *   (see screenshots.js); otherwise screenshots return base64 `image`.
  */
 function countWords(text) {
   if (!text) return 0;
@@ -265,6 +270,12 @@ const extractContent = async (url, options = {}) => {
     if (format === 'screenshot') {
       const buffer = await takeScreenshot(url, proxy);
       recordFetch({ url, format, proxy: proxySpec, outcome: 'success' });
+      // When server-side storage is configured, persist the PNG and hand back a
+      // URL instead of base64 (keeps large images out of the response payload).
+      if (screenshotStorageEnabled()) {
+        const screenshotUrl = await storeScreenshot(buffer);
+        return { type: 'image_url', url: screenshotUrl, mimeType: 'image/png' };
+      }
       return { type: 'image', data: buffer.toString('base64'), mimeType: 'image/png' };
     }
 
@@ -422,6 +433,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       if (result.type === 'image') {
         console.error(`[omni-fetcher] (${result.mimeType}, ${result.data.length} base64 chars)`);
         console.log(result.data);
+      } else if (result.type === 'image_url') {
+        console.log(result.url);
       } else {
         console.log(result.text);
       }

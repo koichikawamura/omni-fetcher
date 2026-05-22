@@ -19,9 +19,13 @@ Pick the cheapest form that meets the need and escalate only if it fails or is i
 | `mercury` | Article Markdown via [Mercury Parser](https://github.com/jocmp/mercury-parser) | Default; clean article text. |
 | `defuddle` | Article Markdown via [Defuddle](https://github.com/kepano/defuddle) | When Mercury misses content — a second opinion extractor. |
 | `rendered_html` | Full rendered HTML | When you need raw markup, or both extractors fail. (Large output.) |
-| `screenshot` | Full-page PNG (base64 image) | Most expensive; when visual layout matters or text extraction fails. |
+| `screenshot` | Full-page PNG — base64 image, or a URL when screenshot storage is configured | Most expensive; when visual layout matters or text extraction fails. |
 
 `mercury`, `defuddle`, and `rendered_html` all reuse the same cached rendered HTML and follow pagination links automatically. `screenshot` always drives a live browser and is not cached.
+
+**Screenshot storage (optional, server-side).** By default `screenshot` returns the PNG inline as base64. Set `OMNI_SCREENSHOT_DIR` and the server instead writes the PNG there and returns a **URL** to it — keeping large images out of the response. Each shot gets a unique, unguessable random filename (so concurrent users can't collide or enumerate each other's URLs), and the server sweeps files older than `OMNI_SCREENSHOT_TTL` on startup and on the `OMNI_CACHE_SWEEP_INTERVAL`. In `MCP_TRANSPORT=http` mode the same port serves these files at `/screenshots/<file>`; set `OMNI_SCREENSHOT_BASE_URL` when the public address differs (reverse proxy, external host). To store the bytes somewhere else entirely (S3, an upload endpoint, …) — including under stdio mode — rewrite the single `storeScreenshot()` function in `screenshots.js` to push the buffer there and return its URL. This is a deployment setting only; clients cannot enable or disable it via `extract`.
+
+> **Access note.** The `/screenshots/<file>` route serves any valid filename to anyone who has the URL — there is no per-user access control. Security rests entirely on the filenames being unguessable (128 random bits), i.e. these are *capability URLs*. That's fine for most deployments, but anyone the URL is shared with (or any intermediary that logs it) can fetch the image until the sweep deletes it. If you need real authorization (only the requester may fetch their shot), add it in front of the route.
 
 The headless browser runs through [`playwright-extra`](https://www.npmjs.com/package/playwright-extra) with the [stealth plugin](https://www.npmjs.com/package/puppeteer-extra-plugin-stealth), which masks the automation fingerprint (`navigator.webdriver`, `window.chrome`, WebGL vendor, …) that some sites use to detect and reset bots. Navigation waits on `domcontentloaded` and retries once on transient connection resets. This still won't beat the strongest anti-bot stacks — pairing with a residential proxy helps there.
 
@@ -87,6 +91,9 @@ Content-*quality* judgments (beyond empty/blocked) are intentionally left to the
 | `OMNI_CACHE_TTL` | `86400` | Rendered-HTML cache lifetime, in seconds. |
 | `OMNI_CACHE_SWEEP_INTERVAL` | `3600` | How often the server bulk-deletes renders older than `OMNI_CACHE_TTL`, in seconds. Runs once at startup, then on this interval; `0` or less disables the recurring sweep (startup-only). |
 | `OMNI_PROXIES_FILE` | `<OMNI_DATA_DIR>/proxies.json` | JSON file seeding the proxy database. |
+| `OMNI_SCREENSHOT_DIR` | — | When set, `screenshot` requests write the PNG here and `extract` returns a **URL** to it instead of inlining base64 (avoids oversized image payloads). Server-side setting; clients cannot toggle it. |
+| `OMNI_SCREENSHOT_BASE_URL` | `http://<MCP_HOST>:<MCP_PORT>/screenshots` | Public URL prefix the stored PNGs are reachable at. Override for a reverse proxy, external host, or third-party store. |
+| `OMNI_SCREENSHOT_TTL` | `86400` | Lifetime of a stored screenshot, in seconds. The server's sweep (startup + `OMNI_CACHE_SWEEP_INTERVAL`) deletes PNGs older than this. |
 
 ## Usage
 
@@ -122,7 +129,7 @@ Clients reach it at `http://<host>:<port>/mcp`. Pair with [`mcp-remote`](https:/
 node extractContent.js <url> [format] [proxy]
 # e.g.
 node extractContent.js https://example.com defuddle
-node extractContent.js https://example.com screenshot   # prints base64 PNG to stdout
+node extractContent.js https://example.com screenshot   # prints base64 PNG (or a URL if OMNI_SCREENSHOT_DIR is set)
 ```
 
 ## Requirements
