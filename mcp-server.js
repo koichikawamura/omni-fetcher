@@ -7,6 +7,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 import extractContent, { closeBrowser, FORMATS, DEFAULT_FORMAT } from './extractContent.js';
 import { loadProxiesFromFile, listProxies } from './proxies.js';
+import { pruneStaleRenders } from './cache.js';
+import { suggestStrategy } from './knowledge.js';
 
 const buildServer = () => {
   const server = new McpServer({
@@ -63,6 +65,24 @@ const buildServer = () => {
     })
   );
 
+  server.registerTool(
+    "suggest_strategy",
+    {
+      title: "Suggest Fetch Strategy",
+      description:
+        "Given a URL, return the recommended order of (format, proxy) to try for that site, " +
+        "learned from past fetches (successes, hard failures, and implicit failures where a " +
+        "cheaper format had to be escalated). Call this before `extract` to skip combinations " +
+        "that tend to fail on the domain. With no history it returns the default cheap→expensive escalation.",
+      inputSchema: {
+        url: z.string().describe("URL (or any URL on the domain) to get a strategy for")
+      }
+    },
+    async ({ url }) => ({
+      content: [{ type: "text", text: JSON.stringify(suggestStrategy(url), null, 2) }]
+    })
+  );
+
   server.registerResource(
     "info",
     "resource://postlight/info",
@@ -80,7 +100,7 @@ const buildServer = () => {
             description: "MCP service that fetches web content as Markdown, raw HTML, or a screenshot",
             version: "1.0.0",
             formats: FORMATS,
-            capabilities: ["extract", "list_proxies"]
+            capabilities: ["extract", "list_proxies", "suggest_strategy"]
           })
         }
       ]
@@ -92,6 +112,27 @@ const buildServer = () => {
 
 const transportMode = (process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
 let httpServer = null;
+let sweepTimer = null;
+
+// Drop renders older than the cache TTL: once at startup, then on an interval
+// for the long-running server (default hourly; override OMNI_CACHE_SWEEP_INTERVAL,
+// in seconds; <=0 disables the recurring sweep).
+const startCacheSweep = () => {
+  const sweep = () => {
+    try {
+      const removed = pruneStaleRenders();
+      if (removed > 0) console.error(`Cache sweep: removed ${removed} stale render(s)`);
+    } catch (err) {
+      console.error(`Cache sweep failed: ${err.message}`);
+    }
+  };
+  sweep();
+  const intervalSeconds = parseInt(process.env.OMNI_CACHE_SWEEP_INTERVAL || '3600', 10);
+  if (intervalSeconds > 0) {
+    sweepTimer = setInterval(sweep, intervalSeconds * 1000);
+    sweepTimer.unref(); // never keep the process alive just for the sweep
+  }
+};
 
 const startStdio = async () => {
   console.error('MCP Server starting (stdio transport)');
@@ -164,6 +205,7 @@ const startHttp = async () => {
 const start = async () => {
   try {
     loadProxiesFromFile();
+    startCacheSweep();
     if (transportMode === 'http') {
       await startHttp();
     } else {
@@ -177,6 +219,7 @@ const start = async () => {
 
 const shutdown = async (signal) => {
   console.error(`Received ${signal}, shutting down`);
+  if (sweepTimer) clearInterval(sweepTimer);
   if (httpServer) {
     await new Promise(resolve => httpServer.close(() => resolve()));
   }

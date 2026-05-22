@@ -1,12 +1,13 @@
 {
   "name": "@koichikawamura/omni-fetcher",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "files": [
     "mcp-server.js",
     "extractContent.js",
     "db.js",
     "cache.js",
     "proxies.js",
+    "knowledge.js",
     "proxies.example.json",
     "package.json",
     "README.md",

@@ -8,6 +8,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { spawn } from 'child_process';
 import { getCachedRender, setCachedRender } from './cache.js';
 import { resolveProxy, loadProxiesFromFile } from './proxies.js';
+import { recordFetch, classifyResult, classifyNavError } from './knowledge.js';
 
 // playwright-extra wraps Playwright's chromium so the stealth plugin can patch
 // the headless fingerprint (navigator.webdriver, window.chrome, plugins, WebGL
@@ -243,50 +244,73 @@ async function parseWithDefuddle(html, url) {
  *   `format` is one of FORMATS (default "mercury").
  * @returns {Promise<{ type: 'text', text: string } | { type: 'image', data: string, mimeType: string }>}
  */
+function countWords(text) {
+  if (!text) return 0;
+  return text.replace(/<[^>]+>/g, ' ').trim().split(/\s+/).filter(Boolean).length;
+}
+
 const extractContent = async (url, options = {}) => {
   validateUrl(url);
   const format = options.format || DEFAULT_FORMAT;
   if (!FORMATS.includes(format)) {
     throw new Error(`Unknown format "${format}". Expected one of: ${FORMATS.join(', ')}.`);
   }
+  // Stats are keyed by the proxy spec the caller passed (id or URL, '' = none)
+  // so a suggested value can be replayed verbatim; `proxy` is what we resolve to
+  // for the actual fetch.
+  const proxySpec = options.proxy || '';
   const proxy = resolveProxy(options.proxy) || process.env.MERCURY_PROXY || undefined;
 
-  if (format === 'screenshot') {
-    const buffer = await takeScreenshot(url, proxy);
-    return { type: 'image', data: buffer.toString('base64'), mimeType: 'image/png' };
-  }
+  try {
+    if (format === 'screenshot') {
+      const buffer = await takeScreenshot(url, proxy);
+      recordFetch({ url, format, proxy: proxySpec, outcome: 'success' });
+      return { type: 'image', data: buffer.toString('base64'), mimeType: 'image/png' };
+    }
 
-  const pages = await crawl(url, proxy);
+    const pages = await crawl(url, proxy);
+    const firstHtml = pages[0]?.html || '';
 
-  if (format === 'rendered_html') {
-    const text = pages.length === 1
-      ? pages[0].html
-      : pages.map((p, i) => `<!-- omni-fetcher page ${i + 1}: ${p.url} -->\n${p.html}`).join('\n\n');
-    return { type: 'text', text };
-  }
+    if (format === 'rendered_html') {
+      const text = pages.length === 1
+        ? pages[0].html
+        : pages.map((p, i) => `<!-- omni-fetcher page ${i + 1}: ${p.url} -->\n${p.html}`).join('\n\n');
+      recordFetch({ url, format, proxy: proxySpec, ...classifyResult({ format, html: firstHtml }) });
+      return { type: 'text', text };
+    }
 
-  if (format === 'defuddle') {
+    if (format === 'defuddle') {
+      const parsed = [];
+      for (const p of pages) {
+        const r = await parseWithDefuddle(p.html, p.url);
+        parsed.push({
+          title: r.title,
+          author: r.author,
+          date_published: r.published,
+          excerpt: r.description,
+          content: r.content,
+          domain: r.domain,
+        });
+      }
+      const text = formatMarkdown(parsed, url, { rawContent: true });
+      const wordCount = countWords(parsed.map(p => p.content).join(' '));
+      recordFetch({ url, format, proxy: proxySpec, ...classifyResult({ format, html: firstHtml, wordCount }) });
+      return { type: 'text', text };
+    }
+
+    // mercury
     const parsed = [];
     for (const p of pages) {
-      const r = await parseWithDefuddle(p.html, p.url);
-      parsed.push({
-        title: r.title,
-        author: r.author,
-        date_published: r.published,
-        excerpt: r.description,
-        content: r.content,
-        domain: r.domain,
-      });
+      parsed.push(await Mercury.parse(p.url, { html: p.html }));
     }
-    return { type: 'text', text: formatMarkdown(parsed, url, { rawContent: true }) };
+    const text = formatMarkdown(parsed, url);
+    const wordCount = countWords(parsed.map(p => p.content).join(' '));
+    recordFetch({ url, format, proxy: proxySpec, ...classifyResult({ format, html: firstHtml, wordCount }) });
+    return { type: 'text', text };
+  } catch (err) {
+    recordFetch({ url, format, proxy: proxySpec, outcome: 'error', errorClass: classifyNavError(err?.message) });
+    throw err;
   }
-
-  // mercury
-  const parsed = [];
-  for (const p of pages) {
-    parsed.push(await Mercury.parse(p.url, { html: p.html }));
-  }
-  return { type: 'text', text: formatMarkdown(parsed, url) };
 };
 
 async function findNextPageLinkSafe(page) {

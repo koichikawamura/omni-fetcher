@@ -42,6 +42,37 @@ Proxies are seeded from a JSON config file at startup (see `proxies.example.json
 
 Save it as `~/.omni-fetcher/proxies.json` (the default location — created on first run; or point `OMNI_PROXIES_FILE` / `OMNI_DATA_DIR` elsewhere). After that you can call `extract` with `proxy: "jp-tokyo"` instead of the full URL. A `proxy` value containing `://` is always treated as a literal URL; otherwise it is looked up as an id.
 
+## Tool: `suggest_strategy`
+
+Returns the recommended order of `(format, proxy)` to try for a URL's domain, learned from past fetches. Call it before `extract` to skip combinations that tend to fail on that site.
+
+| Argument | Type | Required | Description |
+|---|---|:-:|---|
+| `url` | string | yes | URL (or any URL on the domain) to get a strategy for |
+
+```json
+{
+  "domain": "example.com",
+  "hasHistory": true,
+  "recommended": [
+    { "format": "defuddle", "proxy": "jp-tokyo", "successes": 4, "failures": 0, "lastOutcome": "success" },
+    { "format": "mercury", "proxy": "", "successes": 1, "failures": 3, "lastOutcome": "superseded" }
+  ],
+  "summary": "For example.com: best so far is defuddle via jp-tokyo (4 ok / 0 bad). …"
+}
+```
+
+With no history it returns the default escalation `mercury → defuddle → rendered_html → screenshot`.
+
+### How the knowledge is gathered
+
+Every `extract` records its outcome into the SQLite knowledge base (`fetch_log` + `fetch_stats`, same DB file), keyed per `domain × format × proxy`:
+
+- **Hard failures** the server can judge precisely: navigation errors (connection reset, timeout, DNS), anti-bot/challenge pages (Cloudflare "Just a moment…", captcha, 403), and empty results.
+- **Implicit failures**: if the same URL is re-fetched soon after with a *more effortful* format (the escalation order above), the earlier attempt is marked superseded and penalized — the act of escalating signals the cheaper result wasn't good enough.
+
+Content-*quality* judgments (beyond empty/blocked) are intentionally left to the calling agent; an explicit feedback tool may be added later.
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -54,6 +85,7 @@ Save it as `~/.omni-fetcher/proxies.json` (the default location — created on f
 | `OMNI_DATA_DIR` | `~/.omni-fetcher` | Directory holding the SQLite DB and proxy config. Used so `npx` works regardless of cwd. |
 | `OMNI_DB_PATH` | `<OMNI_DATA_DIR>/omni-fetcher.db` | SQLite file holding the render cache and proxy database. |
 | `OMNI_CACHE_TTL` | `86400` | Rendered-HTML cache lifetime, in seconds. |
+| `OMNI_CACHE_SWEEP_INTERVAL` | `3600` | How often the server bulk-deletes renders older than `OMNI_CACHE_TTL`, in seconds. Runs once at startup, then on this interval; `0` or less disables the recurring sweep (startup-only). |
 | `OMNI_PROXIES_FILE` | `<OMNI_DATA_DIR>/proxies.json` | JSON file seeding the proxy database. |
 
 ## Usage

@@ -25,6 +25,17 @@ export function getCachedRender(url, proxy) {
   return { html: row.html, nextUrl: row.next_url || null };
 }
 
+// Bulk-delete every render older than the TTL. getCachedRender only prunes the
+// single key it is asked about, so URLs that are rendered once and never
+// re-requested would otherwise linger forever; this sweeps them. Returns the
+// number of rows removed.
+export function pruneStaleRenders() {
+  const db = getDb();
+  const cutoff = Math.floor(Date.now() / 1000) - TTL_SECONDS;
+  const result = db.prepare('DELETE FROM rendered_html WHERE fetched_at < ?').run(cutoff);
+  return Number(result.changes);
+}
+
 export function setCachedRender(url, proxy, html, nextUrl) {
   const db = getDb();
   db.prepare(
