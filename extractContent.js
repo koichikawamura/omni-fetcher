@@ -218,7 +218,9 @@ async function takeScreenshot(url, proxy) {
     } catch { /* proceed with whatever has rendered */ }
     await autoScroll(page);
     await page.waitForTimeout(500);
-    return await page.screenshot({ fullPage: true, type: 'png' });
+    const lenRawHtml = (await page.content()).length;
+    const buffer = await page.screenshot({ fullPage: true, type: 'png' });
+    return { buffer, lenRawHtml };
   } finally {
     await context.close();
   }
@@ -243,11 +245,14 @@ async function parseWithDefuddle(html, url) {
  * @param {{ proxy?: string, format?: string }} [options]
  *   `proxy` may be a full proxy URL or a known proxy id.
  *   `format` is one of FORMATS (default "mercury").
- * @returns {Promise<{ type: 'text', text: string }
- *   | { type: 'image', data: string, mimeType: string }
- *   | { type: 'image_url', url: string, mimeType: string }>}
+ * @returns {Promise<{ type: 'text', text: string, lenRawHtml: number }
+ *   | { type: 'image', data: string, mimeType: string, lenRawHtml: number }
+ *   | { type: 'image_url', url: string, mimeType: string, lenRawHtml: number }>}
  *   `image_url` is returned for screenshots only when OMNI_SCREENSHOT_DIR is set
  *   (see screenshots.js); otherwise screenshots return base64 `image`.
+ *   `lenRawHtml` is the total character count of the underlying rendered HTML
+ *   across all crawled pages — a cheap signal that the fetch itself succeeded,
+ *   independent of the chosen output form.
  */
 function countWords(text) {
   if (!text) return 0;
@@ -268,26 +273,27 @@ const extractContent = async (url, options = {}) => {
 
   try {
     if (format === 'screenshot') {
-      const buffer = await takeScreenshot(url, proxy);
+      const { buffer, lenRawHtml } = await takeScreenshot(url, proxy);
       recordFetch({ url, format, proxy: proxySpec, outcome: 'success' });
       // When server-side storage is configured, persist the PNG and hand back a
       // URL instead of base64 (keeps large images out of the response payload).
       if (screenshotStorageEnabled()) {
         const screenshotUrl = await storeScreenshot(buffer);
-        return { type: 'image_url', url: screenshotUrl, mimeType: 'image/png' };
+        return { type: 'image_url', url: screenshotUrl, mimeType: 'image/png', lenRawHtml };
       }
-      return { type: 'image', data: buffer.toString('base64'), mimeType: 'image/png' };
+      return { type: 'image', data: buffer.toString('base64'), mimeType: 'image/png', lenRawHtml };
     }
 
     const pages = await crawl(url, proxy);
     const firstHtml = pages[0]?.html || '';
+    const lenRawHtml = pages.reduce((n, p) => n + (p.html?.length || 0), 0);
 
     if (format === 'rendered_html') {
       const text = pages.length === 1
         ? pages[0].html
         : pages.map((p, i) => `<!-- omni-fetcher page ${i + 1}: ${p.url} -->\n${p.html}`).join('\n\n');
       recordFetch({ url, format, proxy: proxySpec, ...classifyResult({ format, html: firstHtml }) });
-      return { type: 'text', text };
+      return { type: 'text', text, lenRawHtml };
     }
 
     if (format === 'defuddle') {
@@ -306,7 +312,7 @@ const extractContent = async (url, options = {}) => {
       const text = formatMarkdown(parsed, url, { rawContent: true });
       const wordCount = countWords(parsed.map(p => p.content).join(' '));
       recordFetch({ url, format, proxy: proxySpec, ...classifyResult({ format, html: firstHtml, wordCount }) });
-      return { type: 'text', text };
+      return { type: 'text', text, lenRawHtml };
     }
 
     // mercury
@@ -317,7 +323,7 @@ const extractContent = async (url, options = {}) => {
     const text = formatMarkdown(parsed, url);
     const wordCount = countWords(parsed.map(p => p.content).join(' '));
     recordFetch({ url, format, proxy: proxySpec, ...classifyResult({ format, html: firstHtml, wordCount }) });
-    return { type: 'text', text };
+    return { type: 'text', text, lenRawHtml };
   } catch (err) {
     recordFetch({ url, format, proxy: proxySpec, outcome: 'error', errorClass: classifyNavError(err?.message) });
     throw err;

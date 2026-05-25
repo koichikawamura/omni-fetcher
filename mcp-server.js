@@ -37,20 +37,38 @@ const buildServer = () => {
           "Optional proxy for the headless browser. Either a full URL (e.g. socks5://localhost:1080, " +
           "http://user:pass@host:port) or a proxy id registered in the proxy database."
         )
+      },
+      outputSchema: {
+        format: z.enum(FORMATS).describe("Form actually produced (matches the requested format, or the default)."),
+        lenRawHtml: z.number().int().describe("Total character count of the underlying rendered HTML across all crawled pages. A cheap sanity check that the fetch itself succeeded, independent of the chosen output form — a near-zero value typically means the page didn't render."),
+        text: z.string().optional().describe("Extracted text content. Present for mercury, defuddle, and rendered_html."),
+        imageData: z.string().optional().describe("Base64-encoded PNG. Present for screenshot when storage is disabled."),
+        imageUrl: z.string().optional().describe("Public URL of the stored screenshot. Present for screenshot when storage is enabled."),
+        mimeType: z.string().optional().describe('MIME type of the image payload (always "image/png" for screenshot).')
       }
     },
     async ({ url, format, proxy }) => {
       try {
         console.error(`Handling extract request: ${url} [${format || DEFAULT_FORMAT}]${proxy ? ` via ${proxy}` : ''}`);
         const result = await extractContent(url, { format, proxy });
+        const usedFormat = format || DEFAULT_FORMAT;
         console.error(`Successfully extracted content from: ${url}`);
         if (result.type === 'image') {
-          return { content: [{ type: "image", data: result.data, mimeType: result.mimeType }] };
+          return {
+            content: [{ type: "image", data: result.data, mimeType: result.mimeType }],
+            structuredContent: { format: usedFormat, lenRawHtml: result.lenRawHtml, imageData: result.data, mimeType: result.mimeType }
+          };
         }
         if (result.type === 'image_url') {
-          return { content: [{ type: "text", text: result.url }] };
+          return {
+            content: [{ type: "text", text: result.url }],
+            structuredContent: { format: usedFormat, lenRawHtml: result.lenRawHtml, imageUrl: result.url, mimeType: result.mimeType }
+          };
         }
-        return { content: [{ type: "text", text: result.text }] };
+        return {
+          content: [{ type: "text", text: result.text }],
+          structuredContent: { format: usedFormat, lenRawHtml: result.lenRawHtml, text: result.text }
+        };
       } catch (error) {
         console.error(`Error in extract: ${error.message}`);
         throw new Error(`Failed to extract content: ${error.message}`);
@@ -58,17 +76,38 @@ const buildServer = () => {
     }
   );
 
+  const proxyEntrySchema = z.object({
+    id: z.string(),
+    url: z.string(),
+    location: z.string().nullable().optional()
+  });
+
   server.registerTool(
     "list_proxies",
     {
       title: "List Proxies",
       description: "List proxies registered in the proxy database (id, url, location). Use an id as the `proxy` argument to `extract`.",
-      inputSchema: {}
+      inputSchema: {},
+      outputSchema: {
+        proxies: z.array(proxyEntrySchema).describe("Registered proxies. Reference one in `extract` by passing its `id` as the `proxy` argument.")
+      }
     },
-    async () => ({
-      content: [{ type: "text", text: JSON.stringify(listProxies(), null, 2) }]
-    })
+    async () => {
+      const proxies = listProxies();
+      return {
+        content: [{ type: "text", text: JSON.stringify(proxies, null, 2) }],
+        structuredContent: { proxies }
+      };
+    }
   );
+
+  const strategyEntrySchema = z.object({
+    format: z.enum(FORMATS),
+    proxy: z.string().describe('Proxy spec to pass to `extract` (empty string for none).'),
+    successes: z.number().int().optional(),
+    failures: z.number().int().optional(),
+    lastOutcome: z.string().nullable().optional()
+  });
 
   server.registerTool(
     "suggest_strategy",
@@ -81,11 +120,21 @@ const buildServer = () => {
         "that tend to fail on the domain. With no history it returns the default cheap→expensive escalation.",
       inputSchema: {
         url: z.string().describe("URL (or any URL on the domain) to get a strategy for")
+      },
+      outputSchema: {
+        domain: z.string().describe("Domain the recommendation applies to."),
+        hasHistory: z.boolean().describe("True when the suggestion is learned from past fetches; false when it is the default escalation."),
+        recommended: z.array(strategyEntrySchema).describe("Ranked (format, proxy) pairs to try, best first."),
+        summary: z.string().describe("Human-readable one-line summary.")
       }
     },
-    async ({ url }) => ({
-      content: [{ type: "text", text: JSON.stringify(suggestStrategy(url), null, 2) }]
-    })
+    async ({ url }) => {
+      const strategy = suggestStrategy(url);
+      return {
+        content: [{ type: "text", text: JSON.stringify(strategy, null, 2) }],
+        structuredContent: strategy
+      };
+    }
   );
 
   server.registerResource(
