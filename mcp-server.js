@@ -2,6 +2,7 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -12,7 +13,7 @@ import { pruneStaleRenders } from './cache.js';
 import { resolveScreenshotFile, pruneStaleScreenshots } from './screenshots.js';
 import { suggestStrategy } from './knowledge.js';
 
-const buildServer = () => {
+export const buildServer = () => {
   const server = new McpServer({
     name: "Omni Fetcher",
     version: "1.0.0"
@@ -172,7 +173,7 @@ let sweepTimer = null;
 // screenshots (OMNI_SCREENSHOT_TTL) — once at startup, then on an interval for
 // the long-running server (default hourly; override OMNI_CACHE_SWEEP_INTERVAL,
 // in seconds; <=0 disables the recurring sweep).
-const startCacheSweep = () => {
+export const startCacheSweep = () => {
   const sweep = async () => {
     try {
       const removed = pruneStaleRenders();
@@ -313,16 +314,30 @@ const shutdown = async (signal) => {
   await closeBrowser();
   process.exit(0);
 };
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+// Run the server only when this file is the entry point (directly or via the
+// `omni-fetcher-mcp` bin symlink — hence realpathSync). Importing `buildServer`
+// from another app must not boot a transport or install process-wide handlers.
+const invokedAsEntryPoint = () => {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+};
 
-process.on('uncaughtException', (err) => {
-  console.error(`Uncaught exception: ${err.message}`);
-  console.error(err.stack);
-});
+if (invokedAsEntryPoint()) {
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-process.on('unhandledRejection', (reason) => {
-  console.error(`Unhandled rejection: ${reason}`);
-});
+  process.on('uncaughtException', (err) => {
+    console.error(`Uncaught exception: ${err.message}`);
+    console.error(err.stack);
+  });
 
-start();
+  process.on('unhandledRejection', (reason) => {
+    console.error(`Unhandled rejection: ${reason}`);
+  });
+
+  start();
+}

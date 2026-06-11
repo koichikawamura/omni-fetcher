@@ -104,7 +104,7 @@ Content-*quality* judgments (beyond empty/blocked) are intentionally left to the
     "mcpServers": {
         "omni-fetcher": {
             "command": "npx",
-            "args": ["@koichikawamura/omni-fetcher", "omni-fetcher-mcp"]
+            "args": ["-y", "@koichikawamura/omni-fetcher"]
         }
     }
 }
@@ -118,7 +118,7 @@ No paths to configure: the SQLite cache and proxy database default to `~/.omni-f
 MCP_TRANSPORT=http \
 MCP_HOST=127.0.0.1 \
 MCP_PORT=3030 \
-npx @koichikawamura/omni-fetcher omni-fetcher-mcp
+npx -y @koichikawamura/omni-fetcher
 ```
 
 Clients reach it at `http://<host>:<port>/mcp`. Pair with [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) on the client side, or register directly as a connector in Claude.ai / ChatGPT if the endpoint is gated by an OAuth-aware proxy.
@@ -131,6 +131,23 @@ node extractContent.js <url> [format] [proxy]
 node extractContent.js https://example.com defuddle
 node extractContent.js https://example.com screenshot   # prints base64 PNG (or a URL if OMNI_SCREENSHOT_DIR is set)
 ```
+
+### Library (embed in your own app)
+
+Since 0.4.0 the modules are importable, so another app can build on the engine or mount the MCP server behind its own HTTP stack (auth, sessions, …):
+
+```js
+import extractContent, { closeBrowser } from '@koichikawamura/omni-fetcher';        // the extraction engine
+import { buildServer, startCacheSweep } from '@koichikawamura/omni-fetcher/server'; // the MCP server factory
+import { loadProxiesFromFile } from '@koichikawamura/omni-fetcher/proxies';
+
+loadProxiesFromFile();                 // seed proxy ids from OMNI_PROXIES_FILE (optional)
+startCacheSweep();                     // cache + screenshot pruning (optional)
+const server = buildServer();          // a fresh McpServer with all three tools registered
+// connect `server` to the transport of your choice, or call extractContent() directly
+```
+
+Importing the package never starts a transport or installs process-wide handlers — that only happens when `mcp-server.js` is the entry point (the `omni-fetcher-mcp` bin). Embedding apps opt into proxy seeding and sweeping themselves, as above. Subpath exports also exist for `db`, `cache`, `knowledge`, and `screenshots`.
 
 ## Requirements
 

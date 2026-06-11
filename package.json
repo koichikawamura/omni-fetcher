@@ -1,6 +1,6 @@
 {
   "name": "@koichikawamura/omni-fetcher",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "files": [
     "mcp-server.js",
     "extractContent.js",
@@ -8,6 +8,7 @@
     "cache.js",
     "proxies.js",
     "knowledge.js",
+    "screenshots.js",
     "proxies.example.json",
     "package.json",
     "README.md",
@@ -16,6 +17,16 @@
   "type": "module",
   "bin": {
     "omni-fetcher-mcp": "mcp-server.js"
+  },
+  "exports": {
+    ".": "./extractContent.js",
+    "./server": "./mcp-server.js",
+    "./db": "./db.js",
+    "./cache": "./cache.js",
+    "./proxies": "./proxies.js",
+    "./knowledge": "./knowledge.js",
+    "./screenshots": "./screenshots.js",
+    "./package.json": "./package.json"
   },
   "engines": {
     "node": ">=22.5.0"
